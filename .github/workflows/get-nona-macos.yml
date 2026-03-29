@@ -1,0 +1,57 @@
+name: Get Nona MacOS
+on: workflow_dispatch
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  
+jobs:
+  extract:
+    runs-on: macos-15-intel
+    steps:
+      - name: Extract and Recursive Patch
+        run: |
+          brew install --cask hugin
+          mkdir -p nona_macos
+          
+          # 1. Находим и копируем всё в одну кучу
+          NONA_SRC=$(find /Applications -name "nona" -type f | grep "Contents/MacOS/nona" | head -n 1)
+          APP_DIR=$(dirname $(dirname "$NONA_SRC"))
+          cp "$NONA_SRC" nona_macos/
+          find "$APP_DIR" -name "*.dylib" -exec cp {} nona_macos/ \;
+          
+          cd nona_macos
+          chmod +x * # Даем права на чтение/запись всем файлам для патчинга
+          
+          # 2. Функция для исправления путей в конкретном файле
+          patch_file() {
+            local target=$1
+            echo "🛠 Patching $target..."
+            # Меняем ID самой библиотеки на относительный
+            install_name_tool -id "@loader_path/$(basename $target)" "$target" 2>/dev/null || true
+            
+            # Находим все зависимости, которые начинаются на @executable_path, и меняем на @loader_path
+            otool -L "$target" | grep "@executable_path" | awk '{print $1}' | while read dep; do
+              new_dep="@loader_path/$(basename "$dep")"
+              install_name_tool -change "$dep" "$new_dep" "$target"
+            done
+          }
+
+          # 3. Применяем патч к nona и ко ВСЕМ dylib
+          patch_file "./nona"
+          for f in *.dylib; do
+            patch_file "$f"
+          done
+
+      - name: Verify Binary (Smoke Test)
+        run: |
+          cd nona_macos
+          # Даем права (на всякий случай повторно)
+          chmod +x nona
+          echo "🚀 Running smoke test..."
+          ./nona --help || (echo "❌ Error: Patching failed or libraries missing!" && exit 1)
+          echo "✅ MacOS Nona is now standalone and working!"          
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nona-macos-bundle
+          path: nona_macos/

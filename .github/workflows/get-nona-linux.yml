@@ -1,0 +1,35 @@
+name: Get Nona Linux
+on: workflow_dispatch # Запуск кнопкой
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Hugin
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y hugin-tools
+          mkdir -p nona_linux
+          
+          # Копируем сам бинарник
+          cp $(which nona) nona_linux/
+          
+          # Собираем все зависимости (.so файлы)
+          ldd $(which nona) | grep "=> /" | awk '{print $3}' | xargs -I '{}' cp '{}' nona_linux/
+
+      - name: Verify Binary (Smoke Test)
+        run: |
+          cd nona_linux
+          chmod +x nona
+          # Сообщаем системе искать библиотеки в текущей папке
+          export LD_LIBRARY_PATH=. 
+          ./nona --help || (echo "❌ Error: Missing libraries!" && exit 1)
+          echo "✅ Linux Nona is portable and working!"          
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nona-linux-package
+          path: nona_linux/

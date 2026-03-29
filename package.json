@@ -1,0 +1,42 @@
+{
+  "name": "html360-gen",
+  "version": "1.0.0",
+  "description": "Standalone, zero-dependency binaries for the original Pannellum `generate.py` script.",
+  "keywords": [
+    "pannellum",
+    "generate.py",
+    "multiresolution",
+    "tiles-generator",
+    "binaries",
+    "panorama",
+    "html360",
+    "360"
+  ],
+  "homepage": "https://github.com/html360/html360-gen",
+  "bugs": {
+    "url": "https://github.com/html360/html360-gen/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/html360/html360-gen.git"
+  },
+  "license": "MIT",
+  "author": "d_hand",
+  "type": "module",
+  "main": "index.js",
+  "bin": {
+    "html360-gen": "cli.js"
+  },
+  "files": [
+    "postinstall.cjs",
+    "index.js",
+    "cli.js",
+    "README.md"
+  ],
+  "scripts": {
+    "postinstall": "node postinstall.cjs"
+  },
+  "engines": {
+    "node": ">=20.10.0"
+  }
+}

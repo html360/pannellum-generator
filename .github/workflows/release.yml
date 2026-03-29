@@ -1,0 +1,171 @@
+name: Build, Release and Test NPM
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+on:
+  push:
+    tags:
+      - 'v*' # Сработает, когда ты создашь тег v1.0.0, v1.0.1 и т.д.
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: html360-gen-win.exe
+            # Берем EXE и все DLL из nona/win
+            pyi_args: '--add-binary "nona/win/*.dll;." --add-binary "nona/win/nona.exe;."'
+
+          - os: ubuntu-latest
+            artifact_name: html360-gen-linux
+            # Берем бинарник и все библиотеки .so из nona/linux
+            pyi_args: '--add-binary "nona/linux/*:."'
+
+          - os: macos-15-intel
+            artifact_name: html360-gen-macos
+            # Берем бинарник и все библиотеки .dylib из nona/mac
+            pyi_args: '--add-binary "nona/mac/*:."'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller Pillow
+
+      - name: Fix Permissions (Linux/Mac)
+        if: runner.os != 'Windows'
+        run: |
+          chmod +x nona/linux/nona || true
+          chmod +x nona/mac/nona || true
+
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller --onefile --console --name ${{ matrix.artifact_name }} ${{ matrix.pyi_args }} generate.py
+
+      - name: Verify Binary (Smoke Test)
+        shell: bash
+        run: |
+          cd dist
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            ./${{ matrix.artifact_name }} --help
+          else
+            chmod +x ./${{ matrix.artifact_name }}
+            ./${{ matrix.artifact_name }} --help
+          fi
+
+      - name: Integration Test (Process Real Image)
+        shell: bash
+        run: |
+          cd dist
+          # Создаем пустую папку для результата
+          mkdir -p output_tiles
+          
+          echo "📸 Processing test panorama..."
+          
+          # Запускаем нарезку (используй флаги своего скрипта)
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            ./${{ matrix.artifact_name }} ../test.jpg 
+          else
+            chmod +x ./${{ matrix.artifact_name }}
+            ./${{ matrix.artifact_name }} ../test.jpg
+          fi
+          
+          # Проверяем, появились ли файлы (папка 1 с тайлами)
+          if [ -d "output/1" ] || [ -f "output/config.json" ]; then
+            echo "✅ Integration Test Passed: Tiles and Config generated!"
+          else
+            echo "❌ Integration Test Failed: No output found."
+            exit 1
+          fi
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.os }}
+          path: dist/${{ matrix.artifact_name }}
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: binary-*
+          path: all-binaries
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: all-binaries/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  test-npm:
+    needs: release
+    name: Test NPM on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest] # Проверяем и на Apple Silicon (macos-latest)
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Pack and Install
+        shell: bash
+        run: |
+          # 1. Упаковываем текущий пакет в .tgz
+          npm pack
+          TARBALL=$(ls html360-gen-*.tgz)
+          
+          # 2. Создаем тестовое окружение
+          mkdir test-env && cd test-env
+          npm init -y
+          
+          # 3. Устанавливаем пакет из архива. 
+          # Это запустит postinstall.js, который скачает бинарник из только что созданного релиза!
+          npm install ../$TARBALL --foreground-scripts
+
+      - name: Run Binary Smoke Test
+        shell: bash
+        run: |
+          cd test-env
+          # Проверяем через Node.js, что путь отдается и бинарник запускается
+          node -e "
+            import { html360Gen } from 'html360-gen';
+            import { execFileSync } from 'child_process';
+            try {
+              const bin = html360Gen.getBinaryPath();
+              console.log('🔍 Testing binary at:', bin);
+              const output = execFileSync(bin, ['--help'], { encoding: 'utf8' });
+              if (output.includes('usage') || output.includes('options')) {
+                console.log('✅ SUCCESS: Binary is alive and kicking!');
+              } else {
+                throw new Error('Unexpected binary output');
+              }
+            } catch (e) {
+              console.error('❌ FATAL: Binary failed!', e.message);
+              process.exit(1);
+            }
+          "

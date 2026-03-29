@@ -1,0 +1,31 @@
+name: Get Nona Windows
+on: workflow_dispatch
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  extract:
+    runs-on: windows-latest
+    steps:
+      - name: Install Hugin via Chocolatey
+        run: |
+          choco install hugin -y
+          # Обычно путь C:\Program Files\Hugin\bin
+          
+      - name: Collect Nona and DLLs
+        shell: powershell
+        run: |
+          mkdir nona_win
+          $huginBin = "C:\Program Files\Hugin\bin"
+          copy "$huginBin\nona.exe" nona_win\
+          copy "$huginBin\*.dll" nona_win\
+          
+      - name: Verify Binary
+        run: |
+          ./nona_win/nona.exe --help
+          
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nona-win-package
+          path: nona_win/
